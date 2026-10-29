@@ -1,0 +1,196 @@
+Metadata-Version: 2.2
+Name: engram
+Version: 0.1.0
+Summary: Your second brain. Fully local. Zero cloud. No PyTorch.
+Author: engram contributors
+License: MIT
+Keywords: second-brain,rag,local,private,knowledge-base,embeddings,onnx
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: End Users/Desktop
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.24
+Requires-Dist: onnxruntime>=1.16
+Requires-Dist: tokenizers>=0.15
+Requires-Dist: huggingface-hub>=0.20
+Requires-Dist: typer>=0.9
+Requires-Dist: rich>=13.0
+Provides-Extra: docs
+Requires-Dist: pypdf>=4.0; extra == "docs"
+Requires-Dist: python-docx>=1.1; extra == "docs"
+Requires-Dist: openpyxl>=3.1; extra == "docs"
+Requires-Dist: ebooklib>=0.18; extra == "docs"
+Requires-Dist: beautifulsoup4>=4.12; extra == "docs"
+Requires-Dist: markdownify>=0.11; extra == "docs"
+Requires-Dist: lxml>=4.9; extra == "docs"
+Provides-Extra: fast
+Requires-Dist: hnswlib>=0.7; extra == "fast"
+Provides-Extra: all
+Requires-Dist: engram[docs,fast]; extra == "all"
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+
+# engram
+
+**Your second brain. Fully local. Zero cloud. Zero PyTorch.**
+
+```
+pip install engram
+engram ingest ~/notes
+engram ask "what did I decide about pricing?"
+```
+
+That's it. No API key. No account. No Docker. No 2 GB PyTorch download.
+Your documents never leave your machine — because there is no code that
+could send them anywhere.
+
+---
+
+## Why this is different
+
+Every "AI knowledge base" today follows the same script: upload your files to
+someone else's server, pay per token, hope they don't train on your data.
+The few local alternatives drag in PyTorch, sentence-transformers and a
+2 GB dependency tree just to embed a sentence.
+
+engram runs sentence embeddings through **ONNX Runtime** and does its own
+tokenization and mean-pooling in numpy. The whole core install is small
+enough to land on a plane's wifi.
+
+| | engram | typical RAG stack |
+|---|---|---|
+| Core install size | **small, CPU-only** | ~2 GB (torch + CUDA deps) |
+| PyTorch | **none** | required |
+| Accounts / API keys | **none** | required |
+| Data leaves your disk | **never** | yes, by design |
+| Works offline | **yes** (after `engram warm`) | no |
+| Setup time | **< 30 s** | minutes to hours |
+
+## Install
+
+```bash
+pip install engram              # core: numpy + onnxruntime + cli
+pip install "engram[docs]"      # + pdf, docx, xlsx, epub, html
+pip install "engram[all]"       # everything, incl. hnswlib for large indexes
+```
+
+First run downloads a quantized MiniLM model (**~23 MB**, once). After that
+you can pull the network cable forever:
+
+```bash
+engram warm     # fetch the model explicitly (optional)
+```
+
+## Use it
+
+```bash
+# index anything: a file, a folder, a whole second brain
+engram ingest ~/Documents/notes
+engram ingest ./research-paper.pdf -b research
+
+# ask
+engram ask "what did I decide about the pricing model?"
+engram ask "deploy window" -b research -k 3
+
+# inspect
+engram ls -b research
+engram stats
+```
+
+Multiple brains are just namespaces — keep work, personal and research
+separate with `-b`.
+
+### Optional: written answers
+
+Retrieval works with **no LLM at all** — you get the exact source passages.
+If you also want a written answer, point engram at a *local* model server
+(Ollama, llama.cpp, LM Studio — anything OpenAI-compatible):
+
+```bash
+engram config --llm-endpoint http://localhost:11434/v1 --llm-model qwen2.5:7b
+engram ask "summarize the pricing decision" --answer
+```
+
+Still nothing leaves your machine. Point it at a remote URL and that's your
+choice, not ours.
+
+## Python API
+
+```python
+from engram import Brain
+
+brain = Brain("work")
+brain.ingest("~/notes")                      # folder or file
+
+hits = brain.search("pricing model")
+for h in hits:
+    print(h.score, h.source, h.text[:200])
+
+result = brain.ask("what did I decide about pricing?")
+print(result["hits"][0]["text"])
+```
+
+`Brain` is persistent — the index lives in `~/.engram/brains/<name>/` and
+reloads on next use.
+
+## How it works
+
+```
+file ──▶ parser ──▶ chunker ──▶ ONNX embedder ──▶ numpy vector store
+                                                        │
+question ───────────────────────────────────────────────┘
+```
+
+- **Parsers** — 15+ formats (pdf, docx, xlsx, epub, html, ipynb, md, txt,
+  code, json…). Each reader is optional and fails soft; one corrupt PDF
+  never kills a run.
+- **Chunker** — splits on the largest boundary that fits: heading →
+  paragraph → sentence → hard slice, with tail overlap so answers that
+  straddle a boundary don't fall through.
+- **Embedder** — ONNX Runtime, self-managed tokenizer, mean-pooling in
+  numpy. 384-d, L2-normalized.
+- **Store** — brute-force cosine over a float32 matrix. Up to ~50k chunks
+  this is *exact* and faster than maintaining an ANN index. Persisted as
+  `.npz` + `.jsonl`.
+
+### Graceful degradation
+
+If the embedding model is missing or the network is blocked, engram does
+**not** crash. It falls back to a signed-hashing lexical encoder that needs
+no model and no network. Retrieval quality drops from semantic to lexical,
+and `engram warm` restores full quality the moment you're online again.
+
+## Privacy
+
+- No telemetry, no analytics, no phone-home. Grep for `http` — the only
+  outbound calls are the one-time model download and the LLM endpoint *you*
+  configure.
+- Everything is stored under `~/.engram/`. Delete that folder and you are
+  gone, completely.
+
+## Supported formats
+
+`txt` `md` `markdown` `rst` `org` `log` `csv` `tsv` `json` `yaml` `xml`
+`tex` `sql` `ini` `toml` `pdf` `docx` `xlsx` `xlsm` `epub` `html` `htm`
+`ipynb` — plus ~30 source-code extensions.
+
+## Roadmap
+
+- [ ] `engram watch` — auto-reindex a folder as you write
+- [ ] Incremental ingest (skip unchanged files by mtime hash)
+- [ ] `engram serve` — local web UI on localhost only
+- [ ] Hybrid BM25 + vector search
+- [ ] Per-source access scoping
+
+## Contributing
+
+Issues and PRs welcome. Keep the core dependency-free of torch — that
+constraint is the whole point.
+
+## License
+
+MIT

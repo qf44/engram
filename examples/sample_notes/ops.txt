@@ -1,0 +1,2 @@
+Deploy window moved to Tuesday 02:00 UTC, staffed by the SRE on-call.
+Rollback must complete within 10 minutes or we abort the release.
